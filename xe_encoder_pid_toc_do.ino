@@ -1,3 +1,8 @@
+#include <Arduino.h>
+#include <Preferences.h>
+#include <math.h>
+
+// =============================================================================
 // PHẦN 1: KHAI BÁO CHÂN PHẦN CỨNG
 // =============================================================================
 // --- Động cơ DC & Mạch cầu TB6612 ---
@@ -15,16 +20,16 @@ const int ECHO_PIN = 17;                       // Chân nhận ECHO
 // =============================================================================
 // PHẦN 2: THÔNG SỐ ĐIỀU KHIỂN ĐỘ CHÍNH XÁC CAO (HIGH PRECISION TUNING)
 // =============================================================================
-// --- Cấu hình Cảm biến Siêu âm ---
-const float OBSTACLE_DIST_CM  = 10.0f;         // Dừng khẩn cấp ở khoảng cách 10cm
-const float OBSTACLE_CLEAR_CM = 13.0f;         // Chạy tiếp khi vật cản ra xa 13cm
-const unsigned long US_READ_INTERVAL = 50;     // Chu kỳ đọc siêu âm (50ms)
+// --- Cấu hình Cảm biến Siêu âm (CHỈ DỪNG XÊ) ---
+const float OBSTACLE_DIST_CM  = 15.0f;         // Ngưỡng dừng an toàn (15cm)
+const float OBSTACLE_CLEAR_CM = 18.0f;         // Ngưỡng chạy tiếp (18cm)
+const unsigned long US_READ_INTERVAL = 60;     // Chu kỳ đọc siêu âm (60ms)
 
-// --- Cấu hình Động cơ PWM ---
+// --- Cấu hình Động cơ PWM Tốc độ Thấp ---
 const bool INVERT_LEFT  = false;
 const bool INVERT_RIGHT = false;
 const int  PWM_MAX      = 220;                 
-int        basePwm      = 45;                  // TỐC ĐỘ CƠ SỞ CHẬM (PWM = 45) ĐỂ BÁM LINE CHÍNH XÁC
+int        basePwm      = 50;                  // TỐC ĐỘ CƠ SỞ CHẬM (PWM = 50) ĐỂ BÁM LINE CHÍNH XÁC
 
 // --- Bộ điều khiển PID Bám Line ---
 const unsigned long CTRL_MS = 20;              // Chu kỳ tính toán (20ms)
@@ -33,20 +38,19 @@ float LKI = 0.6f;                              // Ki triệt tiêu sai số tíc
 float LKD = 16.0f;                             // Kd chống lắc đuôi xe
 const float LINT_LIM = 35.0f;                  
 
-// --- Bộ Mờ (Fuzzy Logic) - Cấu hình giảm tốc theo vị trí LED ---
+// --- Bộ Mờ (Fuzzy Logic) - Cấu hình giảm tốc độ theo vị trí LED ---
 bool  useFuzzy = true;                         
 float DE_MAX = 6.0f;
 
-// SPD_SCALE: 
-// Index 0 (Lệch sâu LED 1/5): Chạy 25% basePwm (Rất chậm để quay đầu)
-// Index 1 (Lệch vừa LED 2/4): Chạy 55% basePwm (Chậm vừa để căn lại vạch)
-// Index 2 (Vạch giữa LED 3) : Chạy 100% basePwm (Tốc độ chuẩn)
+// SPD_SCALE (Chỉ số hãm tốc khi lệch line):
+// Index 0: Lệch LED 1/5 (Cua gắt): Chạy 25% basePwm (Rất chậm để xoay đầu)
+// Index 1: Lệch LED 2/4: Chạy 50% basePwm
+// Index 2: LED 3 ở tâm: Chạy 100% basePwm
 const float KP_SCALE[3]  = {0.80f, 1.00f, 1.50f};
-const float KD_SCALE[3]  = {0.50f, 1.00f, 1.80f};
-const float SPD_SCALE[3] = {0.25f, 0.55f, 1.00f};
+const float KD_SCALE[3] = {0.50f, 1.00f, 1.80f};
+const float SPD_SCALE[3] = {0.25f, 0.50f, 1.00f};
 const float SPD_SMOOTH   = 0.20f;              
 
-// Bảng luật Fuzzy điều khiển giảm tốc độ theo mức độ lệch
 const uint8_t RULE_KP[5][5] = {
   {2, 2, 2, 2, 1}, {2, 2, 1, 1, 0}, {1, 0, 0, 0, 1}, {0, 1, 1, 2, 2}, {1, 2, 2, 2, 2}
 };
@@ -54,11 +58,7 @@ const uint8_t RULE_KD[5][5] = {
   {0, 0, 0, 1, 1}, {0, 0, 1, 2, 2}, {2, 1, 0, 1, 2}, {2, 2, 1, 0, 0}, {1, 1, 0, 0, 0}
 };
 const uint8_t RULE_SPD[5][5] = {
-  {0, 0, 0, 1, 1}, 
-  {0, 1, 1, 2, 2}, 
-  {1, 2, 2, 2, 1}, // Hàng giữa: LED3 ở tâm -> SPD cao nhất
-  {2, 2, 1, 1, 0}, 
-  {1, 1, 0, 0, 0}
+  {0, 0, 0, 1, 1}, {0, 1, 1, 2, 2}, {1, 2, 2, 2, 1}, {2, 2, 1, 1, 0}, {1, 1, 0, 0, 0}
 };
 
 // --- Cấu hình Cảm biến TCRT5000 ---
@@ -70,7 +70,7 @@ const float LINE_W[5] = {-2000, -1000, 0, 1000, 2000};
 const float LINE_DETECT_MIN = 150.0f;
 
 const unsigned long AUTO_STOP_MS = 120000;
-const int AUTOSTART_PWM = 45;                  // Tự động chạy với PWM = 45 sau 3s
+const int AUTOSTART_PWM = 50;                  // Tự động chạy với PWM = 50 sau 3s
 
 
 // =============================================================================
@@ -94,7 +94,7 @@ int currentPwmL = 0, currentPwmR = 0;
 
 
 // =============================================================================
-// PHẦN 4: MODULE CẢM BIẾN SIÊU ÂM HC-SR04 (ĐỌC 10CM)
+// PHẦN 4: MODULE CẢM BIẾN SIÊU ÂM HC-SR04 (ĐỌC 15CM)
 // =============================================================================
 void setupUltrasonic() {
   pinMode(TRIG_PIN, OUTPUT);
@@ -109,7 +109,7 @@ float readUltrasonicCm() {
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  long duration = pulseIn(ECHO_PIN, HIGH, 12000); // Timeout 12ms
+  long duration = pulseIn(ECHO_PIN, HIGH, 15000); // Timeout 15ms
   if (duration == 0) return 999.0f;
   return (float)duration * 0.0343f / 2.0f;
 }
@@ -122,17 +122,19 @@ void checkObstacleTask() {
   float dist = readUltrasonicCm();
   if (dist > 0.0f) currentDistanceCm = dist;
 
-  // Phát hiện vật cản <= 10cm -> Dừng khẩn cấp
+  // Xử lý logic CHỈ DỪNG, KHÔNG NÉ
   if (mode == M_LINE && currentDistanceCm <= OBSTACLE_DIST_CM) {
     mode = M_OBSTACLE_HOLD;
-    drive(0, 0);
-    Serial.printf("![DỪNG KHẨN CẤP] Vat can o %.1f cm (<= 10cm)!\n", currentDistanceCm);
+    drive(0, 0); // Dừng khẩn cấp
+    Serial.printf("![DỪNG] Phat hien vat can o %.1f cm -> Dung xe!\n", currentDistanceCm);
   } 
   else if (mode == M_OBSTACLE_HOLD && currentDistanceCm >= OBSTACLE_CLEAR_CM) {
     mode = M_LINE;
-    Serial.printf("[THÔNG BÁO] Vat can da di chuyen (%.1f cm) -> Tiep tuc bam line!\n", currentDistanceCm);
+    Serial.printf("[CHẠY TIẾP] Vat can da di chuyen (%.1f cm) -> Tiep tuc bam line!\n", currentDistanceCm);
   }
 }
+
+
 // =============================================================================
 // PHẦN 5: MODULE ĐIỀU KHIỂN ĐỘNG CƠ (PWM)
 // =============================================================================
@@ -238,9 +240,9 @@ void fuzzyInfer(float e, float de, float &kp, float &kd, float &spd) {
       if (w <= 0) continue;
       sw  += w;
       skp += w * KP_SCALE[RULE_KP[i][j]];
-skd += w * KD_SCALE[RULE_KD[i][j]];
+      skd += w * KD_SCALE[RULE_KD[i][j]];
       ssp += w * SPD_SCALE[RULE_SPD[i][j]];
-    }
+      }
   }
   kp  = LKP * skp / sw;
   kd  = LKD * skd / sw;
@@ -266,7 +268,7 @@ void lineControl(float dt) {
   bool found = readLine(pos, sum);
 
   if (found) {
-    float e = pos / 2000.0f; // e thuộc [-1.0, 1.0]
+    float e = pos / 2000.0f;
     if (fabsf(e) > 0.15f) lastSide = (e > 0) ? 1 : -1;
 
     float d = (e - linePrevE) / dt;
@@ -279,20 +281,20 @@ void lineControl(float dt) {
       float spdTarget = 1.0f;
       fuzzyInfer(e, dFilt, kpEff, kdEff, spdTarget);
       spdFilt += SPD_SMOOTH * (spdTarget - spdFilt);
-      spdFac = spdFilt; // spdFac tự động giảm từ 1.0 -> 0.55 -> 0.25 khi sai số e tăng
+      spdFac = spdFilt; // spdFac tự động giảm từ 1.0 -> 0.5 -> 0.25 khi sai số e tăng
     }
 
     float u = kpEff * e + lineInteg + kdEff * dFilt;
-    float vBase = basePwm * spdFac; // Tốc độ chạy thẳng bị hạ thấp khi vào cua
+    float vBase = basePwm * spdFac; // Tốc độ cơ sở bị hạ thấp khi xe lệch vạch (vào cua)
 
-    // Phối hợp bẻ lái vi sai
+    // Phối hợp vi sai để hướng bẻ lái
     int pwmL = (int)(vBase + u);
     int pwmR = (int)(vBase - u);
 
     drive(pwmL, pwmR);
     lastE = e;
   } else {
-    // Mất vạch hoàn toàn: Xoay tại chỗ chậm (50 PWM) để tìm lại vạch
+    // Mất vạch: Quét tìm vạch ở tốc độ chậm (50 PWM) tránh quán tính
     int sweepPwm = 50;
     drive(-lastSide * sweepPwm, lastSide * sweepPwm);
   }
@@ -341,14 +343,13 @@ void saveParams() {
 void loadParams() {
   prefs.begin("xeline", true);
   LKP = prefs.getFloat("lkp", LKP); LKI = prefs.getFloat("lki", LKI); LKD = prefs.getFloat("lkd", LKD);
-basePwm = prefs.getInt("basePwm", basePwm); DE_MAX = prefs.getFloat("dmax", DE_MAX);
+  basePwm = prefs.getInt("basePwm", basePwm); DE_MAX = prefs.getFloat("dmax", DE_MAX);
   useFuzzy = prefs.getBool("fz", useFuzzy);
   prefs.end();
 }
-
 void printHelp() {
-  Serial.println("\n--- DANH SACH LENH DIEU KHIEN (HIGH PRECISION 10CM) ---");
-  Serial.println("go <pwm> : Chay bam line voi toc do PWM (vd: go 45)");
+  Serial.println("\n--- DANH SACH LENH DIEU KHIEN (HIGH PRECISION) ---");
+  Serial.println("go <pwm> : Chay bam line voi toc do PWM (vd: go 50)");
   Serial.println("x        : Dung xe ngap lap tuc");
   Serial.println("sens     : Xem trang thai 5 mat cam bien");
   Serial.println("fz <0|1> : 0 = PID thuong, 1 = Fuzzy-PID");
@@ -408,10 +409,10 @@ void loop() {
     handleCommand(line);
   }
 
-  // Task 1: Đọc cảm biến siêu âm phát hiện vật cản 10cm
+  // Task 1: Đọc cảm biến siêu âm dừng xe khi gặp vật cản 15cm
   checkObstacleTask();
 
-  // Task 2: Điều khiển bám line Fuzzy-PID độ chính xác cao (20ms/lần)
+  // Task 2: Điều khiển bám line Fuzzy-PID (20ms/lần)
   unsigned long now = millis();
   if (now - lastControlMs >= CTRL_MS) {
     lastControlMs = now;
